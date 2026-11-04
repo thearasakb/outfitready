@@ -37,13 +37,98 @@ const upload = multer({ storage: storage });
 
 // Home Route
 app.get("/", (req, res) => {
-  res.send("สวัสดีค่ะ Server ทำงานแล้ว!");
+  res.send("สวัสดีค่ะ Server OutfitReady ทำงานแล้ว!");
 });
 
-// GET: ดึงรายการเสื้อผ้าทั้งหมด
+// ==========================================
+// AUTH ROUTES (Register & Login แบบธรรมดา)
+// ==========================================
+
+// 1. POST: สมัครสมาชิก (Register) - บันทึก password ตรงๆ ไม่แฮช
+app.post("/api/register", async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({ message: "กรุณากรอก Username และ Password" });
+    }
+
+    // เช็คว่ามี username นี้ในฐานข้อมูลหรือยัง
+    const [existing] = await db.query("SELECT * FROM users WHERE username = ?", [username]);
+    if (existing.length > 0) {
+      return res.status(400).json({ message: "Username นี้ถูกใช้งานแล้ว" });
+    }
+
+    // บันทึก User ใหม่ลง MySQL
+    const [result] = await db.query(
+      "INSERT INTO users (username, password) VALUES (?, ?)",
+      [username, password]
+    );
+
+    res.status(201).json({
+      message: "สมัครสมาชิกสำเร็จ",
+      userId: result.insertId,
+    });
+  } catch (error) {
+    console.error("Register error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 2. POST: เข้าสู่ระบบ (Login) - เช็ค username และ password ตรงๆ
+app.post("/api/login", async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({ message: "กรุณากรอก Username และ Password" });
+    }
+
+    // ค้นหาผู้ใช้ที่ username และ password ตรงกัน
+    const [users] = await db.query(
+      "SELECT * FROM users WHERE username = ? AND password = ?",
+      [username, password]
+    );
+
+    if (users.length === 0) {
+      return res.status(401).json({ message: "Username หรือ Password ไม่ถูกต้อง" });
+    }
+
+    const user = users[0];
+
+    // ส่งข้อมูลผู้ใช้กลับไปยัง Client (ไว้เก็บใน localStorage)
+    res.json({
+      message: "เข้าสู่ระบบสำเร็จ",
+      user: {
+        id: user.id,
+        username: user.username,
+      },
+    });
+  } catch (error) {
+    console.error("Login error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==========================================
+// CLOTHES ROUTES (CRUD Operations)
+// ==========================================
+
+// GET: ดึงรายการเสื้อผ้า (รองรับการกรองตาม ?user_id=...)
 app.get(["/api/outfit", "/api/clothes"], async (req, res) => {
   try {
-    const [rows] = await db.query("SELECT * FROM clothes ORDER BY id DESC");
+    const { user_id } = req.query;
+    let query = "SELECT * FROM clothes";
+    let params = [];
+
+    if (user_id) {
+      query += " WHERE user_id = ?";
+      params.push(user_id);
+    }
+
+    query += " ORDER BY id DESC";
+
+    const [rows] = await db.query(query, params);
     res.json(rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -67,7 +152,7 @@ app.get("/api/clothes/:id", async (req, res) => {
   }
 });
 
-// POST: เพิ่มเสื้อผ้าใหม่ + อัปโหลดรูปภาพ 
+// POST: เพิ่มเสื้อผ้าใหม่ + อัปโหลดรูปภาพ
 app.post("/api/clothes", upload.single("image"), async (req, res) => {
   try {
     const { user_id, name, category, description } = req.body;
@@ -96,7 +181,7 @@ app.post("/api/clothes", upload.single("image"), async (req, res) => {
   }
 });
 
-// PUT: แก้ไขข้อมูลเสื้อผ้าตาม id (ถ้าเปลี่ยนรูปใหม่ จะลบรูปเก่าใน uploads/ ออกด้วย)
+// PUT: แก้ไขข้อมูลเสื้อผ้าตาม id
 app.put("/api/clothes/:id", upload.single("image"), async (req, res) => {
   try {
     const { id } = req.params;
@@ -142,12 +227,11 @@ app.put("/api/clothes/:id", upload.single("image"), async (req, res) => {
   }
 });
 
-// DELETE: ลบเสื้อผ้าตาม id + ลบไฟล์รูปภาพในโฟลเดอร์ uploads อัตโนมัติ
+// DELETE: ลบเสื้อผ้าตาม id + ลบไฟล์รูปภาพ
 app.delete("/api/clothes/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
-    // 1. ค้นหาชื่อไฟล์รูปก่อนลบข้อมูลใน DB
     const [rows] = await db.query("SELECT image_url FROM clothes WHERE id = ?", [id]);
 
     if (rows.length === 0) {
@@ -156,10 +240,8 @@ app.delete("/api/clothes/:id", async (req, res) => {
 
     const imageName = rows[0].image_url;
 
-    // 2. ลบข้อมูลในฐานข้อมูล MySQL
     const [result] = await db.query("DELETE FROM clothes WHERE id = ?", [id]);
 
-    // 3. ถ้าลบใน DB สำเร็จ ให้สั่ง fs.unlink เพื่อลบไฟล์รูปภาพจริงในโฟลเดอร์ uploads/
     if (result.affectedRows > 0 && imageName) {
       const filePath = path.join(__dirname, "uploads", imageName);
       fs.unlink(filePath, (err) => {
@@ -178,7 +260,7 @@ app.delete("/api/clothes/:id", async (req, res) => {
   }
 });
 
-// Start Server (ย้ายมาไว้ล่างสุด)
+// Start Server
 app.listen(PORT, () => {
   console.log(`Server กำลังทำงานที่ http://localhost:${PORT}`);
 });
