@@ -95,28 +95,8 @@ app.post("/api/clothes", upload.single("image"), async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-// DELETE: ลบเสื้อผ้าตาม id
-app.delete("/api/clothes/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const [result] = await db.query("DELETE FROM clothes WHERE id = ?", [id]);
 
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ message: "ไม่พบข้อมูลที่ต้องการลบ" });
-    }
-
-    res.json({ message: "ลบเสื้อผ้าเรียบร้อยแล้ว" });
-  } catch (error) {
-    console.error("Delete error:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Start Server
-app.listen(PORT, () => {
-  console.log(`Server กำลังทำงานที่ http://localhost:${PORT}`);
-});
-
+// PUT: แก้ไขข้อมูลเสื้อผ้าตาม id (ถ้าเปลี่ยนรูปใหม่ จะลบรูปเก่าใน uploads/ ออกด้วย)
 app.put("/api/clothes/:id", upload.single("image"), async (req, res) => {
   try {
     const { id } = req.params;
@@ -127,8 +107,28 @@ app.put("/api/clothes/:id", upload.single("image"), async (req, res) => {
       return res.status(404).json({ message: "ไม่พบข้อมูลเสื้อผ้าที่ต้องการแก้ไข" });
     }
 
-    const image_url = req.file ? req.file.filename : existing[0].image_url;
-    const safeDescription = description !== undefined ? (description.trim() !== "" ? description : null) : existing[0].description;
+    const oldImage = existing[0].image_url;
+    let image_url = oldImage;
+
+    // ถ้ามีการอัปโหลดรูปภาพใหม่เข้ามา
+    if (req.file) {
+      image_url = req.file.filename;
+
+      // ลบรูปภาพเดิมออกจากโฟลเดอร์ uploads/
+      if (oldImage) {
+        const oldFilePath = path.join(__dirname, "uploads", oldImage);
+        fs.unlink(oldFilePath, (err) => {
+          if (err) console.error("ลบรูปเก่าไม่สำเร็จ:", err.message);
+        });
+      }
+    }
+
+    const safeDescription =
+      description !== undefined
+        ? description.trim() !== ""
+          ? description
+          : null
+        : existing[0].description;
 
     await db.query(
       "UPDATE clothes SET name = ?, category = ?, description = ?, image_url = ? WHERE id = ?",
@@ -140,4 +140,45 @@ app.put("/api/clothes/:id", upload.single("image"), async (req, res) => {
     console.error("Update error:", error);
     res.status(500).json({ error: error.message });
   }
+});
+
+// DELETE: ลบเสื้อผ้าตาม id + ลบไฟล์รูปภาพในโฟลเดอร์ uploads อัตโนมัติ
+app.delete("/api/clothes/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // 1. ค้นหาชื่อไฟล์รูปก่อนลบข้อมูลใน DB
+    const [rows] = await db.query("SELECT image_url FROM clothes WHERE id = ?", [id]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({ message: "ไม่พบข้อมูลที่ต้องการลบ" });
+    }
+
+    const imageName = rows[0].image_url;
+
+    // 2. ลบข้อมูลในฐานข้อมูล MySQL
+    const [result] = await db.query("DELETE FROM clothes WHERE id = ?", [id]);
+
+    // 3. ถ้าลบใน DB สำเร็จ ให้สั่ง fs.unlink เพื่อลบไฟล์รูปภาพจริงในโฟลเดอร์ uploads/
+    if (result.affectedRows > 0 && imageName) {
+      const filePath = path.join(__dirname, "uploads", imageName);
+      fs.unlink(filePath, (err) => {
+        if (err) {
+          console.error("ไม่สามารถลบไฟล์รูปภาพได้:", err.message);
+        } else {
+          console.log(`ลบไฟล์รูปภาพสำเร็จ: ${imageName}`);
+        }
+      });
+    }
+
+    res.json({ message: "ลบเสื้อผ้าและรูปภาพเรียบร้อยแล้ว" });
+  } catch (error) {
+    console.error("Delete error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Start Server (ย้ายมาไว้ล่างสุด)
+app.listen(PORT, () => {
+  console.log(`Server กำลังทำงานที่ http://localhost:${PORT}`);
 });
