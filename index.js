@@ -44,31 +44,25 @@ app.get("/", (req, res) => {
 // AUTH ROUTES (Register & Login แบบธรรมดา)
 // ==========================================
 
-// POST: สมัครสมาชิก
+// 1. POST: สมัครสมาชิก (Register) - บันทึก password ตรงๆ ไม่แฮช
 app.post("/api/register", async (req, res) => {
   try {
     const { username, password } = req.body;
-    const allowedGenders = ["male", "female", "unspecified"];
-    const gender = allowedGenders.includes(req.body.gender)
-      ? req.body.gender
-      : "unspecified";
 
     if (!username || !password) {
       return res.status(400).json({ message: "กรุณากรอก Username และ Password" });
     }
 
-    const [existing] = await db.query(
-      "SELECT * FROM users WHERE username = ?",
-      [username]
-    );
-
+    // เช็คว่ามี username นี้ในฐานข้อมูลหรือยัง
+    const [existing] = await db.query("SELECT * FROM users WHERE username = ?", [username]);
     if (existing.length > 0) {
       return res.status(400).json({ message: "Username นี้ถูกใช้งานแล้ว" });
     }
 
+    // บันทึก User ใหม่ลง MySQL
     const [result] = await db.query(
-      "INSERT INTO users (username, password, gender) VALUES (?, ?, ?)",
-      [username, password, gender]
+      "INSERT INTO users (username, password) VALUES (?, ?)",
+      [username, password]
     );
 
     res.status(201).json({
@@ -81,7 +75,7 @@ app.post("/api/register", async (req, res) => {
   }
 });
 
-// POST: เข้าสู่ระบบ
+// 2. POST: เข้าสู่ระบบ (Login) - เช็ค username และ password ตรงๆ
 app.post("/api/login", async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -90,6 +84,7 @@ app.post("/api/login", async (req, res) => {
       return res.status(400).json({ message: "กรุณากรอก Username และ Password" });
     }
 
+    // ค้นหาผู้ใช้ที่ username และ password ตรงกัน
     const [users] = await db.query(
       "SELECT * FROM users WHERE username = ? AND password = ?",
       [username, password]
@@ -101,6 +96,7 @@ app.post("/api/login", async (req, res) => {
 
     const user = users[0];
 
+    // ส่งข้อมูลผู้ใช้กลับไปยัง Client (ไว้เก็บใน localStorage)
     res.json({
       message: "เข้าสู่ระบบสำเร็จ",
       user: {
@@ -199,9 +195,11 @@ app.put("/api/clothes/:id", upload.single("image"), async (req, res) => {
     const oldImage = existing[0].image_url;
     let image_url = oldImage;
 
+    // ถ้ามีการอัปโหลดรูปภาพใหม่เข้ามา
     if (req.file) {
       image_url = req.file.filename;
 
+      // ลบรูปภาพเดิมออกจากโฟลเดอร์ uploads/
       if (oldImage) {
         const oldFilePath = path.join(__dirname, "uploads", oldImage);
         fs.unlink(oldFilePath, (err) => {
@@ -241,6 +239,7 @@ app.delete("/api/clothes/:id", async (req, res) => {
     }
 
     const imageName = rows[0].image_url;
+
     const [result] = await db.query("DELETE FROM clothes WHERE id = ?", [id]);
 
     if (result.affectedRows > 0 && imageName) {
